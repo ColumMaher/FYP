@@ -20,6 +20,7 @@ bert_model = BertForMaskedLM.from_pretrained("bert-base-uncased").eval()
 
 top_k = 10
 
+
 def decode(tokenizer, pred_idx, top_clean):
     ignore_tokens = string.punctuation + "[PAD]"
     tokens = []
@@ -43,11 +44,13 @@ def encode(tokenizer, text_sentence, add_special_tokens=True):
     return input_ids, mask_idx
 
 
-
 train_iter = PennTreebank(split="train")
 tokenizer = get_tokenizer("basic_english")
-vocab = torchtext.vocab.build_vocab_from_iterator(map(tokenizer, train_iter), specials=["<unk>"])
+vocab = torchtext.vocab.build_vocab_from_iterator(
+    map(tokenizer, train_iter), specials=["<unk>"]
+)
 vocab.set_default_index(vocab["<unk>"])
+
 
 def predict_next_word(
     model: nn.Module,
@@ -91,46 +94,64 @@ def predict_next_word(
 
 
 class LSTM(nn.Module):
-  def __init__(self, vocab_size, embedding_dim, hidden_dim, num_layers, dropout_rate, tie_weights):
-    super().__init__()
+    def __init__(
+        self,
+        vocab_size,
+        embedding_dim,
+        hidden_dim,
+        num_layers,
+        dropout_rate,
+        tie_weights,
+    ):
+        super().__init__()
 
-    self.num_layers = num_layers
-    self.hidden_dim = hidden_dim
-    self.embedding_dim = embedding_dim
+        self.num_layers = num_layers
+        self.hidden_dim = hidden_dim
+        self.embedding_dim = embedding_dim
 
-    self.embedding = nn.Embedding(vocab_size, embedding_dim)
-    self.lstm = nn.LSTM(embedding_dim, hidden_dim, num_layers=num_layers,
-                    dropout=dropout_rate, batch_first=True)
-    self.dropout = nn.Dropout(dropout_rate)
-    self.linear = nn.Linear(hidden_dim, vocab_size)
+        self.embedding = nn.Embedding(vocab_size, embedding_dim)
+        self.lstm = nn.LSTM(
+            embedding_dim,
+            hidden_dim,
+            num_layers=num_layers,
+            dropout=dropout_rate,
+            batch_first=True,
+        )
+        self.dropout = nn.Dropout(dropout_rate)
+        self.linear = nn.Linear(hidden_dim, vocab_size)
 
-    if tie_weights:
-          assert embedding_dim == hidden_dim, 'cannot tie, check dims'
-          self.linear.weight = self.embedding.weight
-    self.init_weights()
+        if tie_weights:
+            assert embedding_dim == hidden_dim, "cannot tie, check dims"
+            self.linear.weight = self.embedding.weight
+        self.init_weights()
 
-  def forward(self, x):
-    # x is a batch of input sequences
-    x = self.embedding(x)
-    x, _ = self.lstm(x)
-    x = self.linear(x)
-    return x
+    def forward(self, x):
+        # x is a batch of input sequences
+        x = self.embedding(x)
+        x, _ = self.lstm(x)
+        x = self.linear(x)
+        return x
 
-  def init_weights(self):
-    init_range_emb = 0.1
-    init_range_other = 1/math.sqrt(self.hidden_dim)
-    self.embedding.weight.data.uniform_(-init_range_emb, init_range_emb)
-    self.linear.weight.data.uniform_(-init_range_other, init_range_other)
-    self.linear.bias.data.zero_()
-    for i in range(self.num_layers):
-        self.lstm.all_weights[i][0] = torch.FloatTensor(self.embedding_dim,
-                self.hidden_dim).uniform_(-init_range_other, init_range_other)
-        self.lstm.all_weights[i][1] = torch.FloatTensor(self.hidden_dim,
-                self.hidden_dim).uniform_(-init_range_other, init_range_other)
+    def init_weights(self):
+        init_range_emb = 0.1
+        init_range_other = 1 / math.sqrt(self.hidden_dim)
+        self.embedding.weight.data.uniform_(-init_range_emb, init_range_emb)
+        self.linear.weight.data.uniform_(-init_range_other, init_range_other)
+        self.linear.bias.data.zero_()
+        for i in range(self.num_layers):
+            self.lstm.all_weights[i][0] = torch.FloatTensor(
+                self.embedding_dim, self.hidden_dim
+            ).uniform_(-init_range_other, init_range_other)
+            self.lstm.all_weights[i][1] = torch.FloatTensor(
+                self.hidden_dim, self.hidden_dim
+            ).uniform_(-init_range_other, init_range_other)
 
-  def init_state(self, sequence_length):
-        return (torch.zeros(self.num_layers, sequence_length, self.lstm_size),
-                torch.zeros(self.num_layers, sequence_length, self.lstm_size))
+    def init_state(self, sequence_length):
+        return (
+            torch.zeros(self.num_layers, sequence_length, self.lstm_size),
+            torch.zeros(self.num_layers, sequence_length, self.lstm_size),
+        )
+
 
 vocab_size = len(vocab)
 embedding_dim = 100
@@ -138,19 +159,33 @@ hidden_dim = 100
 num_layers = 2
 dropout_rate = 0.4
 tie_weights = True
-lstm_model = LSTM(vocab_size, embedding_dim, hidden_dim, num_layers, dropout_rate, tie_weights)
-lstm_model.load_state_dict(torch.load("C:/Users/Colum/Documents/CS4125Repo/cs4125_project/FYP/Models/LSTM_Model.pt"))
+lstm_model = LSTM(
+    vocab_size, embedding_dim, hidden_dim, num_layers, dropout_rate, tie_weights
+)
+lstm_model.load_state_dict(
+    torch.load(
+        "C:/Users/Colum/Documents/CS4125Repo/cs4125_project/FYP/Models/LSTM_Model.pt"
+    )
+)
 lstm_model.eval()
 
 
 class TransformerModel(nn.Module):
-
-    def __init__(self, vocab_size: int, embedding_dim: int, num_head: int, hidden_dim: int,
-                 num_layers: int, dropout: float = 0.5):
+    def __init__(
+        self,
+        vocab_size: int,
+        embedding_dim: int,
+        num_head: int,
+        hidden_dim: int,
+        num_layers: int,
+        dropout: float = 0.5,
+    ):
         super().__init__()
-        self.model_type = 'Transformer'
+        self.model_type = "Transformer"
         self.pos_encoder = PositionalEncoding(embedding_dim, dropout)
-        encoder_layers = TransformerEncoderLayer(embedding_dim, num_head, hidden_dim, dropout)
+        encoder_layers = TransformerEncoderLayer(
+            embedding_dim, num_head, hidden_dim, dropout
+        )
         self.transformer_encoder = TransformerEncoder(encoder_layers, num_layers)
         self.encoder = nn.Embedding(vocab_size, embedding_dim)
         self.embedding_dim = embedding_dim
@@ -182,39 +217,50 @@ class TransformerModel(nn.Module):
 
 def generate_square_subsequent_mask(sz: int) -> Tensor:
     """Generates an upper-triangular matrix of -inf, with zeros on diag."""
-    return torch.triu(torch.ones(sz, sz) * float('-inf'), diagonal=1)
+    return torch.triu(torch.ones(sz, sz) * float("-inf"), diagonal=1)
+
 
 class PositionalEncoding(nn.Module):
-
     def __init__(self, embedding_dim: int, dropout: float = 0.1, max_len: int = 5000):
         super().__init__()
         self.dropout = nn.Dropout(p=dropout)
 
         position = torch.arange(max_len).unsqueeze(1)
-        div_term = torch.exp(torch.arange(0, embedding_dim, 2) * (-math.log(10000.0) / embedding_dim))
+        div_term = torch.exp(
+            torch.arange(0, embedding_dim, 2) * (-math.log(10000.0) / embedding_dim)
+        )
         pe = torch.zeros(max_len, 1, embedding_dim)
         pe[:, 0, 0::2] = torch.sin(position * div_term)
         pe[:, 0, 1::2] = torch.cos(position * div_term)
-        self.register_buffer('pe', pe)
+        self.register_buffer("pe", pe)
 
     def forward(self, x: Tensor) -> Tensor:
         """
         Args:
             x: Tensor, shape [seq_len, batch_size, embedding_dim]
         """
-        x = x + self.pe[:x.size(0)]
+        x = x + self.pe[: x.size(0)]
         return self.dropout(x)
+
 
 embedding_dim = 200  # embedding dimension
 hidden_dim = 200  # dimension of the feedforward network model in nn.TransformerEncoder
 num_layers = 2  # number of nn.TransformerEncoderLayer in nn.TransformerEncoder
 num_head = 2  # number of heads in nn.MultiheadAttention
 dropout = 0.2
-transformer_model = TransformerModel(vocab_size, embedding_dim, num_head, hidden_dim, num_layers, dropout)
+transformer_model = TransformerModel(
+    vocab_size, embedding_dim, num_head, hidden_dim, num_layers, dropout
+)
 bptt = 35
 
-def transformer_predict_next_word(model: nn.Module, prompt: str, vocab: torchtext.vocab.Vocab, top_k: int,
-                      temperature: float = 1.0) -> str:
+
+def transformer_predict_next_word(
+    model: nn.Module,
+    prompt: str,
+    vocab: torchtext.vocab.Vocab,
+    top_k: int,
+    temperature: float = 1.0,
+) -> str:
     """
     Generates the next word in a sentence given the prompt and the trained model.
 
@@ -248,7 +294,10 @@ def transformer_predict_next_word(model: nn.Module, prompt: str, vocab: torchtex
     output = output / temperature
     probs = F.softmax(output, dim=-1)
     top_k_probs, top_k_words = probs.topk(k=top_k)
-    next_word_list = [(vocab.get_itos()[i[0].item()], p[0].item()) for i, p in zip(top_k_words, top_k_probs)]
+    next_word_list = [
+        (vocab.get_itos()[i[0].item()], p[0].item())
+        for i, p in zip(top_k_words, top_k_probs)
+    ]
     return next_word_list
 
 
@@ -257,13 +306,25 @@ def get_model_predictions(text_sentence, top_clean=5):
 
     LSTM = predict_next_word(lstm_model, text_sentence, vocab, top_k=top_k)
     LSTM_Pred = ""
+    i = 0
     for s, n in LSTM:
-        LSTM_Pred += s + "\n"
+        if i < top_clean:
+            i += 1
+            LSTM_Pred += s + "\n"
+        else:
+            break
 
-    TF = transformer_predict_next_word(transformer_model, text_sentence, vocab, top_k=top_k)
+    i = 0
+    TF = transformer_predict_next_word(
+        transformer_model, text_sentence, vocab, top_k=top_k
+    )
     TF_Pred = ""
-    for s,n in TF:
-        TF_Pred += s + "\n"
+    for s, n in TF:
+        if i < top_clean:
+            i += 1
+            TF_Pred += s + "\n"
+        else:
+            break
 
     text_sentence = text_sentence + " [MASK]"
 
@@ -276,14 +337,17 @@ def get_model_predictions(text_sentence, top_clean=5):
         bert_tokenizer, predict[0, mask_idx, :].topk(top_k).indices.tolist(), top_clean
     )
     roberta_prediction = decode(
-        roberta_tokenizer, predict2[0, mask_idx, :].topk(top_k).indices.tolist(), top_clean
+        roberta_tokenizer,
+        predict2[0, mask_idx, :].topk(top_k).indices.tolist(),
+        top_clean,
     )
 
-    return {'lstm': LSTM_Pred,
-            'transformer': TF_Pred,
-            'bert': bert_prediction,
-            'roberta': roberta_prediction
-            }
+    return {
+        "lstm": LSTM_Pred,
+        "transformer": TF_Pred,
+        "bert": bert_prediction,
+        "roberta": roberta_prediction,
+    }
 
 
 print(get_model_predictions("How are you", 5))
