@@ -59,27 +59,16 @@ def predict_next_word(
     top_k: int,
     temperature: float = 1.0,
 ) -> str:
-    """
-    Generates the next word in a sentence given the prompt and the trained model.
-
-    Args:
-        model: nn.Module, the trained LSTM model
-        prompt: str, the prompt to generate the next word for
-        vocab: torchtext.vocab.Vocab, the vocabulary used during training
-        top_k: int, the number of next most probably words
-        temperature: float, the sampling temperature to use when generating the next word
-
-    Returns:
-        list of tuple, the generated next word and its probability
-    """
     # Tokenize the prompt and convert to tensor
     tokenized_prompt = tokenizer(prompt)
     tensor_prompt = torch.tensor(vocab(tokenized_prompt), dtype=torch.long)
+    prompt_length = len(tokenized_prompt)
 
     # Pass the prompt through the model
     with torch.no_grad():
         model.eval()  # turn on evaluation mode
-        output = model(tensor_prompt.unsqueeze(0))
+        hidden = model.init_hidden(prompt_length)
+        output, _ = model(tensor_prompt.unsqueeze(0), hidden)#.to(device)
         output = output[-1, :, :]
 
     # Sample the next word from the output
@@ -93,78 +82,68 @@ def predict_next_word(
     return next_word_list
 
 
-class LSTM(nn.Module):
-    def __init__(
-        self,
-        vocab_size,
-        embedding_dim,
-        hidden_dim,
-        num_layers,
-        dropout_rate,
-        tie_weights,
-    ):
-        super().__init__()
+class BiLSTM(nn.Module):
+  def __init__(self, vocab_size, embedding_dim, hidden_dim, num_layers, dropout_rate):
+    super().__init__()
 
-        self.num_layers = num_layers
-        self.hidden_dim = hidden_dim
-        self.embedding_dim = embedding_dim
+    self.num_layers = num_layers
+    self.hidden_dim = hidden_dim
+    self.embedding_dim = embedding_dim
 
-        self.embedding = nn.Embedding(vocab_size, embedding_dim)
-        self.lstm = nn.LSTM(
-            embedding_dim,
-            hidden_dim,
-            num_layers=num_layers,
-            dropout=dropout_rate,
-            batch_first=True,
-        )
-        self.dropout = nn.Dropout(dropout_rate)
-        self.linear = nn.Linear(hidden_dim, vocab_size)
+    self.embedding = nn.Embedding(vocab_size, embedding_dim)
+    self.lstm = nn.LSTM(embedding_dim, hidden_dim, num_layers=num_layers, 
+                        dropout=dropout_rate, bidirectional=True)
+    self.dropout = nn.Dropout(dropout_rate)
+    self.linear = nn.Linear(hidden_dim*2, vocab_size) # update hidden_dim*2
 
-        if tie_weights:
-            assert embedding_dim == hidden_dim, "cannot tie, check dims"
-            self.linear.weight = self.embedding.weight
-        self.init_weights()
+    self.init_weights()
 
-    def forward(self, x):
-        # x is a batch of input sequences
-        x = self.embedding(x)
-        x, _ = self.lstm(x)
-        x = self.linear(x)
-        return x
+  def forward(self, x, hidden):
+    output  = self.embedding(x)
+    output, hidden = self.lstm(output, hidden)
+    output = self.dropout(output)
+    output = self.linear(output)
+    return output, hidden
 
-    def init_weights(self):
-        init_range_emb = 0.1
-        init_range_other = 1 / math.sqrt(self.hidden_dim)
-        self.embedding.weight.data.uniform_(-init_range_emb, init_range_emb)
-        self.linear.weight.data.uniform_(-init_range_other, init_range_other)
-        self.linear.bias.data.zero_()
-        for i in range(self.num_layers):
-            self.lstm.all_weights[i][0] = torch.FloatTensor(
-                self.embedding_dim, self.hidden_dim
-            ).uniform_(-init_range_other, init_range_other)
-            self.lstm.all_weights[i][1] = torch.FloatTensor(
-                self.hidden_dim, self.hidden_dim
-            ).uniform_(-init_range_other, init_range_other)
-
-    def init_state(self, sequence_length):
-        return (
-            torch.zeros(self.num_layers, sequence_length, self.lstm_size),
-            torch.zeros(self.num_layers, sequence_length, self.lstm_size),
-        )
+  def init_weights(self):
+    init_range_emb = 0.1
+    init_range_other = 1/math.sqrt(self.hidden_dim)
+    self.embedding.weight.data.uniform_(-init_range_emb, init_range_emb)
+    self.linear.weight.data.uniform_(-init_range_other, init_range_other)
+    self.linear.bias.data.zero_()
 
 
+  def init_hidden(self, batch_size):
+    hidden = torch.zeros(self.num_layers*2, batch_size, self.hidden_dim)#.to(device)
+    cell = torch.zeros(self.num_layers*2, batch_size, self.hidden_dim)#.to(device)
+    return hidden, cell
+  
+  def detach_hidden(self, hidden):
+    hidden, cell = hidden
+    hidden = hidden.detach()
+    cell = cell.detach()
+    return hidden, cell
+
+
+#vocab_size = len(vocab)
+#embedding_dim = 100
+#hidden_dim = 100
+#num_layers = 2
+#dropout_rate = 0.4
+#tie_weights = True
+#lstm_model = LSTM(
+#    vocab_size, embedding_dim, hidden_dim, num_layers, dropout_rate, tie_weights
+#)
 vocab_size = len(vocab)
 embedding_dim = 100
 hidden_dim = 100
-num_layers = 2
+num_layers = 1
 dropout_rate = 0.4
-tie_weights = True
-lstm_model = LSTM(
-    vocab_size, embedding_dim, hidden_dim, num_layers, dropout_rate, tie_weights
-)
+lstm_model = BiLSTM(vocab_size, embedding_dim, hidden_dim, num_layers, dropout_rate)
+
 lstm_model.load_state_dict(
     torch.load(
-        "C:/Users/Colum/Documents/CS4125Repo/cs4125_project/FYP/Models/LSTM_Model.pt"
+        "C:/Users/Colum/Documents/CS4125Repo/cs4125_project/FYP/Models/BiLSTM_Model.pt"
     )
 )
 lstm_model.eval()
@@ -200,14 +179,6 @@ class TransformerModel(nn.Module):
         self.decoder.weight.data.uniform_(-initrange, initrange)
 
     def forward(self, src: Tensor, src_mask: Tensor) -> Tensor:
-        """
-        Args:
-            src: Tensor, shape [seq_len, batch_size]
-            src_mask: Tensor, shape [seq_len, seq_len]
-
-        Returns:
-            output Tensor of shape [seq_len, batch_size, vocab_size]
-        """
         src = self.encoder(src) * math.sqrt(self.embedding_dim)
         src = self.pos_encoder(src)
         output = self.transformer_encoder(src, src_mask)
@@ -261,19 +232,6 @@ def transformer_predict_next_word(
     top_k: int,
     temperature: float = 1.0,
 ) -> str:
-    """
-    Generates the next word in a sentence given the prompt and the trained model.
-
-    Args:
-        model: nn.Module, the trained model
-        prompt: str, the prompt to generate the next word for
-        vocab: torchtext.vocab.Vocab, the vocabulary used during training
-        top_k: int, the number of next most probably words
-        temperature: float, the sampling temperature to use when generating the next word
-
-    Returns:
-        list of tuple, the generated next word and its probability
-    """
     # Tokenize the prompt and convert to tensor
     tokenized_prompt = tokenizer(prompt)
     tensor_prompt = torch.tensor(vocab(tokenized_prompt), dtype=torch.long)
